@@ -38,6 +38,7 @@ if uploaded_file is not None:
   else:
     df_all_signals["標的名稱"] = df_all_signals["標的名稱"].astype(str)
     df_all_signals["監控點"] = df_all_signals["監控點"].astype(str)
+    df_all_signals["高亮類型"] = df_all_signals["高亮類型"].astype(str)
 
     # 2. 側邊欄或上方控制列：選擇標的與參數
     st.sidebar.header("查詢設定")
@@ -87,11 +88,16 @@ if uploaded_file is not None:
           today_date = df.index[-1].strftime("%Y-%m-%d")
           ticker_signals = filtered_df
 
-          lian_c_series = pd.Series(float("nan"), index=df.index)
-          lian_v_series = pd.Series(float("nan"), index=df.index)
+          # 建立不同的訊號序列 (包含連次、連量、以及綠色高亮)
+          lian_c_series = pd.Series(float("nan"), index=df.index)  # 連次訊號
+          lian_v_series = pd.Series(float("nan"), index=df.index)  # 連量訊號
+          green_high_series = pd.Series(
+              float("nan"), index=df.index
+          )  # 綠色高亮訊號
 
           for _, row in ticker_signals.iterrows():
             monitor_point = str(row["監控點"])
+            highlight_type = str(row["高亮類型"])
             start_time_str = str(row["開始時間"])
             try:
               signal_dt = pd.to_datetime(f"{today_date} {start_time_str}")
@@ -99,14 +105,33 @@ if uploaded_file is not None:
               if idx != -1:
                 match_time = df.index[idx]
                 target_price = df.loc[match_time, "High"] * 1.002
-                if "連次" in monitor_point:
+
+                # 判斷邏輯：若高亮類型為「綠色高亮」，優先歸類到綠色高亮序列
+                if "綠色高亮" in highlight_type:
+                  green_high_series.loc[match_time] = target_price
+                elif "連次" in monitor_point:
                   lian_c_series.loc[match_time] = target_price
                 elif "連量" in monitor_point:
                   lian_v_series.loc[match_time] = target_price
-            except Exception:
-              pass
+            except Exception as ex:
+              print(f"解析時間失敗: {ex}")
 
+          # 使用 mplfinance 的 addplot 將圖標疊加
           plots = []
+          
+          # 1. 綠色高亮 (綠色向上箭頭 '^')
+          if green_high_series.notna().any():
+            plots.append(
+                mpf.make_addplot(
+                    green_high_series,
+                    type="scatter",
+                    marker="^",
+                    markersize=120,
+                    color="green",
+                )
+            )
+
+          # 2. 連次訊號 (橘色倒三角 'v')
           if lian_c_series.notna().any():
             plots.append(
                 mpf.make_addplot(
@@ -117,25 +142,30 @@ if uploaded_file is not None:
                     color="orange",
                 )
             )
+
+          # 3. 連量訊號 (紅色正三角 '^') - 尺寸調小為 60
           if lian_v_series.notna().any():
             plots.append(
                 mpf.make_addplot(
                     lian_v_series,
                     type="scatter",
                     marker="^",
-                    markersize=120,
+                    markersize=60,  # 尺寸由原本的 120 改為 60
                     color="red",
                 )
             )
 
-          # 繪製 mplfinance 圖表並轉換給 Streamlit 顯示
+          # 畫出走勢圖
           fig, axes = mpf.plot(
               df,
               type="candle",
               volume=True,
               style="yahoo",
               addplot=plots if plots else None,
-              title=f"\n{success_ticker} Intraday Signals (橙:連次 / 紅:連量)",
+              title=(
+                  f"\n{success_ticker} Intraday Signals (綠:綠色高亮 /"
+                  " 橙:連次 / 紅:連量[小])"
+              ),
               ylabel="Price",
               ylabel_lower="Volume",
               returnfig=True,
