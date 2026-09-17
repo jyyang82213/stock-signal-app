@@ -1,16 +1,29 @@
 from datetime import datetime
-import matplotlib.pyplot as plt
-import mplfinance as mpf
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
 # 頁面基本設定
 st.set_page_config(
-    page_title="盤中訊號總覽與走勢分析雲端版", layout="wide"
+    page_title="盤中訊號總覽與走勢分析雲端版 (互動圖表)", layout="wide"
 )
 
-st.title("📈 盤中訊號總覽與走勢分析工具 (雲端版)")
+# 自訂 CSS 樣式
+st.markdown(
+    """
+    <style>
+    .stDataFrame {
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+st.title("📈 盤中訊號總覽與走勢分析工具 (互動縮放版)")
 
 # 1. 檔案上傳區塊
 uploaded_file = st.file_uploader(
@@ -40,7 +53,7 @@ if uploaded_file is not None:
     df_all_signals["監控點"] = df_all_signals["監控點"].astype(str)
     df_all_signals["高亮類型"] = df_all_signals["高亮類型"].astype(str)
 
-    # 2. 側邊欄或上方控制列：選擇標的與參數
+    # 2. 側邊欄：選擇標的與參數
     st.sidebar.header("查詢設定")
     tickers = sorted(df_all_signals["標的名稱"].unique().tolist())
     selected_ticker_base = st.sidebar.selectbox("🔍 選擇查詢標的", tickers)
@@ -53,13 +66,13 @@ if uploaded_file is not None:
         df_all_signals["標的名稱"] == selected_ticker_base
     ]
 
-    # 顯示訊號總覽表格
+    # 3. 顯示訊號總覽表格 (支援互動縮放、固定高度捲動)
     st.subheader(f"📋 {selected_ticker_base} 訊號列表")
-    st.dataframe(filtered_df, use_container_width=True)
+    st.dataframe(filtered_df, use_container_width=True, height=300)
 
-    # 3. 繪圖按鈕
-    if st.sidebar.button("📊 繪製該標的全部訊號圖", type="primary"):
-      with st.spinner("正在從 Yahoo Finance 抓取資料並繪圖..."):
+    # 4. 繪圖按鈕
+    if st.sidebar.button("📊 繪製互動式走勢圖", type="primary"):
+      with st.spinner("正在從 Yahoo Finance 抓取資料並繪製互動圖表..."):
         df = pd.DataFrame()
         success_ticker = ""
         for suffix in [".TW", ".TWO"]:
@@ -88,12 +101,10 @@ if uploaded_file is not None:
           today_date = df.index[-1].strftime("%Y-%m-%d")
           ticker_signals = filtered_df
 
-          # 建立不同的訊號序列 (包含連次、連量、以及綠色高亮)
-          lian_c_series = pd.Series(float("nan"), index=df.index)  # 連次訊號
-          lian_v_series = pd.Series(float("nan"), index=df.index)  # 連量訊號
-          green_high_series = pd.Series(
-              float("nan"), index=df.index
-          )  # 綠色高亮訊號
+          # 建立訊號時間與價格的對應記錄
+          green_high_times, green_high_prices = [], []
+          lian_c_times, lian_c_prices = [], []
+          lian_v_times, lian_v_prices = [], []
 
           for _, row in ticker_signals.iterrows():
             monitor_point = str(row["監控點"])
@@ -106,71 +117,116 @@ if uploaded_file is not None:
                 match_time = df.index[idx]
                 target_price = df.loc[match_time, "High"] * 1.002
 
-                # 判斷邏輯：若高亮類型為「綠色高亮」，優先歸類到綠色高亮序列
                 if "綠色高亮" in highlight_type:
-                  green_high_series.loc[match_time] = target_price
+                  green_high_times.append(match_time)
+                  green_high_prices.append(target_price)
                 elif "連次" in monitor_point:
-                  lian_c_series.loc[match_time] = target_price
+                  lian_c_times.append(match_time)
+                  lian_c_prices.append(target_price)
                 elif "連量" in monitor_point:
-                  lian_v_series.loc[match_time] = target_price
+                  lian_v_times.append(match_time)
+                  lian_v_prices.append(target_price)
             except Exception as ex:
               print(f"解析時間失敗: {ex}")
 
-          # 使用 mplfinance 的 addplot 將圖標疊加
-          plots = []
-          
-          # 1. 綠色高亮 (綠色向上箭頭 '^')
-          if green_high_series.notna().any():
-            plots.append(
-                mpf.make_addplot(
-                    green_high_series,
-                    type="scatter",
-                    marker="^",
-                    markersize=120,
-                    color="green",
-                )
-            )
-
-          # 2. 連次訊號 (橘色倒三角 'v')
-          if lian_c_series.notna().any():
-            plots.append(
-                mpf.make_addplot(
-                    lian_c_series,
-                    type="scatter",
-                    marker="v",
-                    markersize=120,
-                    color="orange",
-                )
-            )
-
-          # 3. 連量訊號 (紅色正三角 '^') - 尺寸調小為 60
-          if lian_v_series.notna().any():
-            plots.append(
-                mpf.make_addplot(
-                    lian_v_series,
-                    type="scatter",
-                    marker="^",
-                    markersize=60,  # 尺寸由原本的 120 改為 60
-                    color="red",
-                )
-            )
-
-          # 畫出走勢圖
-          fig, axes = mpf.plot(
-              df,
-              type="candle",
-              volume=True,
-              style="yahoo",
-              addplot=plots if plots else None,
-              title=(
-                  f"\n{success_ticker} Intraday Signals (綠:綠色高亮 /"
-                  " 橙:連次 / 紅:連量[小])"
-              ),
-              ylabel="Price",
-              ylabel_lower="Volume",
-              returnfig=True,
+          # 使用 Plotly 建立上下子圖（上圖：K線，下圖：成交量）
+          fig = make_subplots(
+              rows=2,
+              cols=1,
+              shared_xaxes=True,
+              vertical_spacing=0.03,
+              row_heights=[0.75, 0.25],
           )
 
-          st.pyplot(fig)
+          # 1. 繪製 K 線圖 (Candlestick)
+          fig.add_trace(
+              go.Candlestick(
+                  x=df.index,
+                  open=df["Open"],
+                  high=df["High"],
+                  low=df["Low"],
+                  close=df["Close"],
+                  name="K線",
+              ),
+              row=1,
+              col=1,
+          )
+
+          # 2. 繪製成交量圖 (Volume)，依漲跌顯示紅綠柱
+          colors = [
+              "red" if c >= o else "green"
+              for c, o in zip(df["Close"], df["Open"])
+          ]
+          fig.add_trace(
+              go.Bar(
+                  x=df.index,
+                  y=df["Volume"],
+                  name="成交量",
+                  marker_color=colors,
+              ),
+              row=2,
+              col=1,
+          )
+
+          # 3. 疊加訊號標記
+          # 綠色高亮 (綠色向上箭頭)
+          if green_high_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=green_high_times,
+                    y=green_high_prices,
+                    mode="markers",
+                    name="綠色高亮",
+                    marker=dict(
+                        symbol="triangle-up", size=14, color="green"
+                    ),
+                ),
+                row=1,
+                col=1,
+            )
+
+          # 橘色連次 (橘色向下箭頭)
+          if lian_c_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=lian_c_times,
+                    y=lian_c_prices,
+                    mode="markers",
+                    name="連次",
+                    marker=dict(
+                        symbol="triangle-down", size=14, color="orange"
+                    ),
+                ),
+                row=1,
+                col=1,
+            )
+
+          # 紅色連量 (紅色向上箭頭，尺寸較小)
+          if lian_v_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=lian_v_times,
+                    y=lian_v_prices,
+                    mode="markers",
+                    name="連量",
+                    marker=dict(
+                        symbol="triangle-up", size=8, color="red"
+                    ),  # 尺寸調小
+                ),
+                row=1,
+                col=1,
+            )
+
+          # 設定圖表互動與排版屬性
+          fig.update_layout(
+              title=f"<b>{success_ticker} 盤中訊號互動走勢圖</b>",
+              xaxis_rangeslider_visible=False,  # 關閉預設下方滑桿，讓畫面更清爽
+              height=650,
+              template="plotly_white",
+              hovermode="x unified",
+          )
+
+          # 渲染到 Streamlit 網頁中 (st.plotly_chart 支援互動拖曳、縮放與全螢幕)
+          st.plotly_chart(fig, use_container_width=True)
 else:
   st.info("👋 請先在上方上傳您的盤中訊號 Excel 檔案以開始使用。")
