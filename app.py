@@ -66,7 +66,7 @@ if uploaded_file is not None:
         df_all_signals["標的名稱"] == selected_ticker_base
     ]
 
-    # 3. 顯示訊號總覽表格 (支援互動縮放、固定高度捲動)
+    # 3. 顯示訊號總覽表格
     st.subheader(f"📋 {selected_ticker_base} 訊號列表")
     st.dataframe(filtered_df, use_container_width=True, height=300)
 
@@ -101,10 +101,13 @@ if uploaded_file is not None:
           today_date = df.index[-1].strftime("%Y-%m-%d")
           ticker_signals = filtered_df
 
-          # 建立訊號時間與價格的對應記錄
-          green_high_times, green_high_prices = [], []
-          lian_c_times, lian_c_prices = [], []
-          lian_v_times, lian_v_prices = [], []
+          # 建立清晰的三種訊號分類序列 (時間與價格清單)
+          lian_c_times, lian_c_prices = [], []  # 連次 (橘色倒三角)
+          lian_v_red_times, lian_v_red_prices = [], []  # 連量-紅高亮 (紅色正三角)
+          lian_v_green_times, lian_v_green_prices = (
+              [],
+              [],
+          )  # 連量-綠高亮 (綠色正三角)
 
           for _, row in ticker_signals.iterrows():
             monitor_point = str(row["監控點"])
@@ -117,19 +120,22 @@ if uploaded_file is not None:
                 match_time = df.index[idx]
                 target_price = df.loc[match_time, "High"] * 1.002
 
-                if "綠色高亮" in highlight_type:
-                  green_high_times.append(match_time)
-                  green_high_prices.append(target_price)
-                elif "連次" in monitor_point:
+                # 乾淨且不重複的條件判斷
+                if "連次" in monitor_point:
                   lian_c_times.append(match_time)
                   lian_c_prices.append(target_price)
                 elif "連量" in monitor_point:
-                  lian_v_times.append(match_time)
-                  lian_v_prices.append(target_price)
+                  if "綠" in highlight_type:
+                    lian_v_green_times.append(match_time)
+                    lian_v_green_prices.append(target_price)
+                  else:
+                    # 預設或包含紅高亮
+                    lian_v_red_times.append(match_time)
+                    lian_v_red_prices.append(target_price)
             except Exception as ex:
               print(f"解析時間失敗: {ex}")
 
-          # 使用 Plotly 建立上下子圖（上圖：K線，下圖：成交量）
+          # 使用 Plotly 建立上下子圖
           fig = make_subplots(
               rows=2,
               cols=1,
@@ -152,7 +158,7 @@ if uploaded_file is not None:
               col=1,
           )
 
-          # 2. 繪製成交量圖 (Volume)，依漲跌顯示紅綠柱
+          # 2. 繪製成交量圖 (Volume)
           colors = [
               "red" if c >= o else "green"
               for c, o in zip(df["Close"], df["Open"])
@@ -169,49 +175,45 @@ if uploaded_file is not None:
           )
 
           # 3. 疊加訊號標記
-          # 綠色高亮 (綠色向上箭頭)
-          if green_high_times:
-            fig.add_trace(
-                go.Scatter(
-                    x=green_high_times,
-                    y=green_high_prices,
-                    mode="markers",
-                    name="綠色高亮",
-                    marker=dict(
-                        symbol="triangle-up", size=14, color="green"
-                    ),
-                ),
-                row=1,
-                col=1,
-            )
-
-          # 橘色連次 (橘色向下箭頭)
+          # (1) 連次：橘色倒三角形
           if lian_c_times:
             fig.add_trace(
                 go.Scatter(
                     x=lian_c_times,
                     y=lian_c_prices,
                     mode="markers",
-                    name="連次",
+                    name="連次 (橘)",
                     marker=dict(
-                        symbol="triangle-down", size=14, color="orange"
+                        symbol="triangle-down", size=12, color="orange"
                     ),
                 ),
                 row=1,
                 col=1,
             )
 
-          # 紅色連量 (紅色向上箭頭，尺寸較小)
-          if lian_v_times:
+          # (2) 連量 (紅高亮)：紅色正三角形 (小尺寸)
+          if lian_v_red_times:
             fig.add_trace(
                 go.Scatter(
-                    x=lian_v_times,
-                    y=lian_v_prices,
+                    x=lian_v_red_times,
+                    y=lian_v_red_prices,
                     mode="markers",
-                    name="連量",
-                    marker=dict(
-                        symbol="triangle-up", size=8, color="red"
-                    ),  # 尺寸調小
+                    name="連量-紅高亮 (紅)",
+                    marker=dict(symbol="triangle-up", size=8, color="red"),
+                ),
+                row=1,
+                col=1,
+            )
+
+          # (3) 連量 (綠高亮)：綠色正三角形 (小尺寸)
+          if lian_v_green_times:
+            fig.add_trace(
+                go.Scatter(
+                    x=lian_v_green_times,
+                    y=lian_v_green_prices,
+                    mode="markers",
+                    name="連量-綠高亮 (綠)",
+                    marker=dict(symbol="triangle-up", size=8, color="green"),
                 ),
                 row=1,
                 col=1,
@@ -220,13 +222,12 @@ if uploaded_file is not None:
           # 設定圖表互動與排版屬性
           fig.update_layout(
               title=f"<b>{success_ticker} 盤中訊號互動走勢圖</b>",
-              xaxis_rangeslider_visible=False,  # 關閉預設下方滑桿，讓畫面更清爽
+              xaxis_rangeslider_visible=False,
               height=650,
               template="plotly_white",
               hovermode="x unified",
           )
 
-          # 渲染到 Streamlit 網頁中 (st.plotly_chart 支援互動拖曳、縮放與全螢幕)
           st.plotly_chart(fig, use_container_width=True)
 else:
   st.info("👋 請先在上方上傳您的盤中訊號 Excel 檔案以開始使用。")
